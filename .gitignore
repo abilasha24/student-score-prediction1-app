@@ -1,0 +1,16 @@
+dnn_env/
+__pycache__/
+*.pyc
+
+train.csv
+test.csv
+sample_submission.csv
+
+rf_model.pkl
+student_score_dnn.h5
+dnn_scaler.pkl
+prediction_history.csv
+
+.streamlit/
+
+DNN.ipynb
