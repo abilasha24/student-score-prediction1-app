@@ -6,6 +6,10 @@ import numpy as np
 import joblib
 
 from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import (
     r2_score,
@@ -15,13 +19,13 @@ from sklearn.metrics import (
 
 
 # =====================================================
-# PATHS
+# PATH SETUP
 # =====================================================
 
 CURRENT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = CURRENT_DIR.parent
 
-DATASET_PATH = ROOT_DIR / "train.csv"
+TRAIN_PATH = ROOT_DIR / "train.csv"
 MODEL_PATH = ROOT_DIR / "gbr_model.pkl"
 FEATURE_PATH = ROOT_DIR / "feature_cols.pkl"
 
@@ -30,302 +34,627 @@ FEATURE_PATH = ROOT_DIR / "feature_cols.pkl"
 # PAGE
 # =====================================================
 
-st.title("🧠 Model Training")
+st.title("🤖 Model Training")
 
-st.write(
-    "Train the Gradient Boosting model using the student dataset."
+st.markdown(
+    "Train a Gradient Boosting model to predict student exam scores."
 )
 
 st.markdown("---")
 
 
 # =====================================================
-# LOAD DATASET
+# DATA SOURCE
 # =====================================================
 
-if not DATASET_PATH.exists():
+st.subheader("📁 Training Dataset")
 
-    st.error("❌ train.csv was not found.")
-    st.stop()
-
-
-df = pd.read_csv(
-    DATASET_PATH,
-    low_memory=False
+source = st.radio(
+    "Choose dataset source:",
+    ["Upload CSV", "Use local train.csv"],
+    horizontal=True
 )
 
-
-st.success(
-    f"✅ Dataset loaded successfully: "
-    f"{df.shape[0]:,} rows × {df.shape[1]} columns"
-)
+df = None
 
 
 # =====================================================
-# NORMALIZE COLUMN NAMES
+# UPLOAD CSV
 # =====================================================
 
-df.columns = (
-    df.columns
-    .astype(str)
-    .str.strip()
-    .str.lower()
-    .str.replace(" ", "_", regex=False)
-    .str.replace("-", "_", regex=False)
-)
+if source == "Upload CSV":
+
+    uploaded_file = st.file_uploader(
+        "Upload training CSV",
+        type=["csv"]
+    )
+
+    if uploaded_file is not None:
+
+        try:
+
+            df = pd.read_csv(
+                uploaded_file,
+                low_memory=False
+            )
+
+            st.success(
+                f"✅ Dataset loaded successfully! "
+                f"Rows: {len(df):,} | "
+                f"Columns: {len(df.columns)}"
+            )
+
+        except Exception as e:
+
+            st.error("❌ Failed to read uploaded CSV.")
+            st.code(str(e))
+
+            st.stop()
+
+    else:
+
+        st.info(
+            "⬆️ Upload a CSV file to begin training."
+        )
+
+        st.stop()
 
 
 # =====================================================
-# CHECK TARGET
+# LOCAL DATASET
 # =====================================================
 
-if "exam_score" not in df.columns:
+else:
+
+    if TRAIN_PATH.exists():
+
+        try:
+
+            df = pd.read_csv(
+                TRAIN_PATH,
+                low_memory=False
+            )
+
+            st.success(
+                f"✅ train.csv loaded successfully! "
+                f"Rows: {len(df):,} | "
+                f"Columns: {len(df.columns)}"
+            )
+
+        except Exception as e:
+
+            st.error(
+                "❌ Failed to read train.csv."
+            )
+
+            st.code(str(e))
+
+            st.stop()
+
+    else:
+
+        st.warning(
+            "⚠️ train.csv is not available."
+        )
+
+        st.info(
+            "Please select **Upload CSV** "
+            "and upload your training dataset."
+        )
+
+        st.stop()
+
+
+# =====================================================
+# TARGET COLUMN
+# =====================================================
+
+st.subheader("🎯 Target Column")
+
+possible_targets = [
+    "exam_score",
+    "score",
+    "marks",
+    "final_score",
+    "target"
+]
+
+available_targets = [
+    col
+    for col in possible_targets
+    if col in df.columns
+]
+
+if not available_targets:
 
     st.error(
-        "❌ 'exam_score' column was not found in train.csv."
+        "❌ Target column not found. "
+        "Expected one of: "
+        "exam_score, score, marks, final_score, target"
     )
 
-    st.write(
-        "Available columns:"
-    )
+    st.write("Available columns:")
 
     st.write(
-        df.columns.tolist()
+        list(df.columns)
     )
 
     st.stop()
 
 
+target_col = st.selectbox(
+    "Select target column:",
+    available_targets
+)
+
+
 # =====================================================
-# FEATURES
+# BASIC CLEANING
 # =====================================================
 
-features = [
-    "age",
-    "gender",
-    "course",
-    "study_hours",
-    "class_attendance",
-    "internet_access",
-    "sleep_hours",
-    "sleep_quality",
-    "study_method",
-    "facility_rating",
-    "exam_difficulty"
-]
+df = df.copy()
 
 
-available_features = [
-    feature
-    for feature in features
-    if feature in df.columns
-]
+# Remove completely empty columns
+df = df.dropna(
+    axis=1,
+    how="all"
+)
 
 
-if len(available_features) == 0:
+# Remove rows where target is missing
+df = df.dropna(
+    subset=[target_col]
+)
 
-    st.error(
-        "❌ None of the expected features were found."
+
+# Convert target to numeric
+y = pd.to_numeric(
+    df[target_col],
+    errors="coerce"
+)
+
+
+# Keep only valid target rows
+valid_rows = y.notna()
+
+X = df.drop(
+    columns=[target_col]
+)
+
+X = X.loc[
+    valid_rows
+].copy()
+
+y = y.loc[
+    valid_rows
+].copy()
+
+
+# =====================================================
+# REMOVE ID COLUMN
+# =====================================================
+
+if "id" in X.columns:
+
+    X = X.drop(
+        columns=["id"]
     )
 
-    st.write(
-        df.columns.tolist()
+
+# =====================================================
+# CLEAN COLUMN TYPES
+# =====================================================
+
+# Convert boolean columns to strings
+for col in X.select_dtypes(
+    include=["bool"]
+).columns:
+
+    X[col] = X[col].astype(str)
+
+
+# Detect categorical columns
+categorical_cols = X.select_dtypes(
+    include=["object", "category"]
+).columns.tolist()
+
+
+# Detect numeric columns
+numeric_cols = X.select_dtypes(
+    include=["number"]
+).columns.tolist()
+
+
+# =====================================================
+# FORCE NUMERIC COLUMNS TO NUMERIC
+# =====================================================
+
+for col in numeric_cols:
+
+    X[col] = pd.to_numeric(
+        X[col],
+        errors="coerce"
     )
 
-    st.stop()
+
+# =====================================================
+# FORCE CATEGORICAL VALUES TO STRINGS
+# =====================================================
+
+for col in categorical_cols:
+
+    X[col] = (
+        X[col]
+        .fillna("Unknown")
+        .astype(str)
+        .str.strip()
+    )
 
 
-st.subheader("📋 Features Used")
+# =====================================================
+# FEATURE INFORMATION
+# =====================================================
 
-st.write(
-    available_features
+st.subheader("🔎 Feature Information")
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "Training Rows",
+    f"{len(X):,}"
 )
 
-st.write(
-    "Target: **exam_score**"
+c2.metric(
+    "Numeric Features",
+    len(numeric_cols)
 )
 
-
-# =====================================================
-# PREPARE DATA
-# =====================================================
-
-model_df = df[
-    available_features + ["exam_score"]
-].dropna()
-
-
-X_raw = model_df[
-    available_features
-]
-
-y = model_df[
-    "exam_score"
-]
-
-
-# =====================================================
-# ENCODE CATEGORICAL FEATURES
-# =====================================================
-
-X = pd.get_dummies(
-    X_raw,
-    drop_first=False
-)
-
-feature_columns = X.columns.tolist()
-
-
-# =====================================================
-# TRAIN / TEST SPLIT
-# =====================================================
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.2,
-    random_state=42
+c3.metric(
+    "Categorical Features",
+    len(categorical_cols)
 )
 
 
 # =====================================================
-# TRAINING
+# PREPROCESSING PIPELINES
 # =====================================================
 
-st.subheader("🚀 Model Training")
-
-st.write(
-    f"Training rows: {len(X_train):,}"
+numeric_pipeline = Pipeline(
+    steps=[
+        (
+            "imputer",
+            SimpleImputer(
+                strategy="median"
+            )
+        )
+    ]
 )
 
-st.write(
-    f"Testing rows: {len(X_test):,}"
+
+categorical_pipeline = Pipeline(
+    steps=[
+        (
+            "imputer",
+            SimpleImputer(
+                strategy="most_frequent"
+            )
+        ),
+        (
+            "encoder",
+            OneHotEncoder(
+                handle_unknown="ignore",
+                sparse_output=False
+            )
+        )
+    ]
 )
 
 
-train_button = st.button(
-    "🚀 Start Gradient Boosting Training",
+# =====================================================
+# COLUMN TRANSFORMER
+# =====================================================
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        (
+            "numeric",
+            numeric_pipeline,
+            numeric_cols
+        ),
+        (
+            "categorical",
+            categorical_pipeline,
+            categorical_cols
+        )
+    ],
+    remainder="drop"
+)
+
+
+# =====================================================
+# TRAIN BUTTON
+# =====================================================
+
+st.markdown("---")
+
+if st.button(
+    "🚀 Train Gradient Boosting Model",
     use_container_width=True
-)
+):
+
+    try:
+
+        with st.spinner(
+            "Training model... This may take some time."
+        ):
+
+            # =========================================
+            # TRAIN / TEST SPLIT
+            # =========================================
+
+            X_train, X_test, y_train, y_test = (
+                train_test_split(
+                    X,
+                    y,
+                    test_size=0.20,
+                    random_state=42
+                )
+            )
 
 
-if train_button:
+            # =========================================
+            # FIT PREPROCESSOR
+            # =========================================
 
-    with st.spinner(
-        "Training model... Please wait."
-    ):
-
-        model = GradientBoostingRegressor(
-            random_state=42,
-            n_estimators=100
-        )
-
-        model.fit(
-            X_train,
-            y_train
-        )
+            X_train_processed = (
+                preprocessor.fit_transform(
+                    X_train
+                )
+            )
 
 
-        predictions = model.predict(
-            X_test
-        )
+            # =========================================
+            # TRANSFORM TEST DATA
+            # =========================================
+
+            X_test_processed = (
+                preprocessor.transform(
+                    X_test
+                )
+            )
 
 
-        # Metrics
+            # =========================================
+            # FEATURE NAMES
+            # =========================================
 
-        r2 = r2_score(
-            y_test,
-            predictions
-        )
+            feature_names = []
 
-        mae = mean_absolute_error(
-            y_test,
-            predictions
-        )
+            # Numeric feature names
+            feature_names.extend(
+                numeric_cols
+            )
 
-        rmse = np.sqrt(
-            mean_squared_error(
+
+            # Categorical feature names
+            if len(categorical_cols) > 0:
+
+                categorical_encoder = (
+                    preprocessor
+                    .named_transformers_[
+                        "categorical"
+                    ]
+                    .named_steps[
+                        "encoder"
+                    ]
+                )
+
+                categorical_feature_names = (
+                    categorical_encoder
+                    .get_feature_names_out(
+                        categorical_cols
+                    )
+                )
+
+                feature_names.extend(
+                    categorical_feature_names.tolist()
+                )
+
+
+            # =========================================
+            # GRADIENT BOOSTING MODEL
+            # =========================================
+
+            model = GradientBoostingRegressor(
+                n_estimators=150,
+                learning_rate=0.05,
+                max_depth=3,
+                random_state=42
+            )
+
+
+            # =========================================
+            # TRAIN MODEL
+            # =========================================
+
+            model.fit(
+                X_train_processed,
+                y_train
+            )
+
+
+            # =========================================
+            # TEST PREDICTIONS
+            # =========================================
+
+            predictions = model.predict(
+                X_test_processed
+            )
+
+
+            # =========================================
+            # METRICS
+            # =========================================
+
+            r2 = r2_score(
                 y_test,
                 predictions
             )
+
+
+            mae = mean_absolute_error(
+                y_test,
+                predictions
+            )
+
+
+            rmse = np.sqrt(
+                mean_squared_error(
+                    y_test,
+                    predictions
+                )
+            )
+
+
+            accuracy_10 = (
+                np.mean(
+                    np.abs(
+                        y_test.values
+                        - predictions
+                    ) <= 10
+                ) * 100
+            )
+
+
+            # =========================================
+            # MODEL BUNDLE
+            # =========================================
+
+            model_bundle = {
+                "model": model,
+                "preprocessor": preprocessor,
+                "target_column": target_col
+            }
+
+
+            # =========================================
+            # SAVE MODEL
+            # =========================================
+
+            joblib.dump(
+                model_bundle,
+                MODEL_PATH
+            )
+
+
+            # =========================================
+            # SAVE FEATURE NAMES
+            # =========================================
+
+            joblib.dump(
+                feature_names,
+                FEATURE_PATH
+            )
+
+
+        # =================================================
+        # RESULTS
+        # =================================================
+
+        st.success(
+            "✅ Model trained successfully!"
         )
 
-        accuracy_10 = (
-            np.mean(
-                np.abs(
-                    y_test - predictions
-                ) <= 10
-            ) * 100
+
+        st.subheader(
+            "📊 Model Performance"
+        )
+
+
+        c1, c2, c3, c4 = st.columns(4)
+
+
+        c1.metric(
+            "R² Score",
+            f"{r2:.4f}"
+        )
+
+
+        c2.metric(
+            "MAE",
+            f"{mae:.2f}"
+        )
+
+
+        c3.metric(
+            "RMSE",
+            f"{rmse:.2f}"
+        )
+
+
+        c4.metric(
+            "Accuracy ±10",
+            f"{accuracy_10:.2f}%"
+        )
+
+
+        st.markdown("---")
+
+
+        st.success(
+            "🎯 Training completed. "
+            "The model is ready for the Prediction page."
+        )
+
+
+        st.info(
+            f"💾 Model saved: "
+            f"{MODEL_PATH.name}"
+        )
+
+
+        st.info(
+            f"💾 Features saved: "
+            f"{FEATURE_PATH.name}"
         )
 
 
         # =================================================
-        # SAVE MODEL
+        # MODEL VALIDATION
         # =================================================
 
-        joblib.dump(
-            model,
-            MODEL_PATH
+        st.markdown("---")
+
+        st.subheader(
+            "🔍 Model Validation"
         )
 
-        joblib.dump(
-            feature_columns,
-            FEATURE_PATH
+        st.write(
+            "Model type:",
+            type(model).__name__
+        )
+
+        st.write(
+            "Preprocessor:",
+            type(preprocessor).__name__
+        )
+
+        st.write(
+            "Processed training features:",
+            X_train_processed.shape[1]
+        )
+
+        st.write(
+            "Saved model bundle:",
+            "✅ Ready"
         )
 
 
-    # =====================================================
-    # RESULTS
-    # =====================================================
+    except Exception as e:
 
-    st.success(
-        "✅ Model trained successfully!"
-    )
+        st.error(
+            "❌ Model training failed."
+        )
 
-    st.success(
-        f"💾 Saved model: {MODEL_PATH.name}"
-    )
-
-    st.success(
-        f"💾 Saved features: {FEATURE_PATH.name}"
-    )
-
-
-    # =====================================================
-    # METRICS
-    # =====================================================
-
-    st.subheader(
-        "📊 Model Performance"
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-
-
-    c1.metric(
-        "R² Score",
-        f"{r2:.4f}"
-    )
-
-    c2.metric(
-        "MAE",
-        f"{mae:.2f}"
-    )
-
-    c3.metric(
-        "RMSE",
-        f"{rmse:.2f}"
-    )
-
-    c4.metric(
-        "Accuracy ±10",
-        f"{accuracy_10:.2f}%"
-    )
-
-
-    st.markdown("---")
-
-    st.success(
-        "🎯 Training completed. "
-        "The model is ready for the Prediction page."
-    )
+        st.exception(e)
