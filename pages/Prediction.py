@@ -14,6 +14,7 @@ CURRENT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = CURRENT_DIR.parent
 
 MODEL_PATH = ROOT_DIR / "gbr_model.pkl"
+HISTORY_PATH = ROOT_DIR / "prediction_history.csv"
 
 
 # =====================================================
@@ -61,7 +62,6 @@ if not MODEL_PATH.exists():
 
 @st.cache_resource
 def load_model_bundle():
-
     return joblib.load(MODEL_PATH)
 
 
@@ -123,9 +123,7 @@ except Exception as e:
         "❌ Failed to load trained model."
     )
 
-    st.code(
-        str(e)
-    )
+    st.code(str(e))
 
     st.stop()
 
@@ -181,7 +179,6 @@ with st.expander("🔍 Model Information"):
 # =====================================================
 
 st.subheader("📝 Student Information")
-
 
 col1, col2 = st.columns(2)
 
@@ -328,7 +325,7 @@ input_df = pd.DataFrame(
 
 
 # =====================================================
-# FORCE CORRECT DATA TYPES
+# DATA TYPES
 # =====================================================
 
 numeric_columns = [
@@ -382,7 +379,6 @@ if input_df[numeric_columns].isna().any().any():
 
 st.markdown("---")
 
-
 predict_button = st.button(
     "🚀 Predict Exam Score",
     use_container_width=True
@@ -397,9 +393,9 @@ if predict_button:
 
     try:
 
-        # -------------------------------------------------
-        # Ensure columns match training data
-        # -------------------------------------------------
+        # =================================================
+        # GET TRAINING COLUMNS FROM PREPROCESSOR
+        # =================================================
 
         transformer_columns = []
 
@@ -407,30 +403,32 @@ if predict_button:
             preprocessor.transformers
         ):
 
-            if transformer_name != "remainder":
+            if transformer_name == "remainder":
+                continue
 
-                if isinstance(columns, (list, tuple)):
+
+            if isinstance(columns, (list, tuple)):
+
+                transformer_columns.extend(
+                    columns
+                )
+
+            else:
+
+                try:
 
                     transformer_columns.extend(
-                        columns
+                        list(columns)
                     )
 
-                else:
+                except TypeError:
 
-                    try:
-
-                        transformer_columns.extend(
-                            list(columns)
-                        )
-
-                    except TypeError:
-
-                        pass
+                    pass
 
 
-        # -------------------------------------------------
-        # Check required columns
-        # -------------------------------------------------
+        # =================================================
+        # CHECK REQUIRED COLUMNS
+        # =================================================
 
         missing_columns = [
             column
@@ -452,9 +450,9 @@ if predict_button:
             st.stop()
 
 
-        # -------------------------------------------------
-        # Reorder columns
-        # -------------------------------------------------
+        # =================================================
+        # REORDER COLUMNS
+        # =================================================
 
         if transformer_columns:
 
@@ -467,9 +465,9 @@ if predict_button:
             input_for_model = input_df.copy()
 
 
-        # -------------------------------------------------
-        # Final dtype protection
-        # -------------------------------------------------
+        # =================================================
+        # FINAL DATA TYPE PROTECTION
+        # =================================================
 
         for column in numeric_columns:
 
@@ -491,27 +489,27 @@ if predict_button:
                 )
 
 
-        # -------------------------------------------------
-        # Transform
-        # -------------------------------------------------
+        # =================================================
+        # PREPROCESS
+        # =================================================
 
         X_input = preprocessor.transform(
             input_for_model
         )
 
 
-        # -------------------------------------------------
-        # Model prediction
-        # -------------------------------------------------
+        # =================================================
+        # MODEL PREDICTION
+        # =================================================
 
         prediction = model.predict(
             X_input
         )
 
 
-        # -------------------------------------------------
-        # Score
-        # -------------------------------------------------
+        # =================================================
+        # SCORE
+        # =================================================
 
         score = float(
             prediction[0]
@@ -562,6 +560,56 @@ if predict_button:
 
 
         # =================================================
+        # SAVE PREDICTION HISTORY
+        # =================================================
+
+        history_df = input_df.copy()
+
+
+        history_df["predicted_exam_score"] = round(
+            score,
+            2
+        )
+
+
+        history_df["performance"] = category
+
+
+        history_df["status"] = status
+
+
+        history_df["model_used"] = type(
+            model
+        ).__name__
+
+
+        history_df["timestamp"] = pd.Timestamp.now()
+
+
+        # -------------------------------------------------
+        # Save history
+        # -------------------------------------------------
+
+        if HISTORY_PATH.exists():
+
+            history_df.to_csv(
+                HISTORY_PATH,
+                mode="a",
+                header=False,
+                index=False
+            )
+
+        else:
+
+            history_df.to_csv(
+                HISTORY_PATH,
+                mode="w",
+                header=True,
+                index=False
+            )
+
+
+        # =================================================
         # RESULT
         # =================================================
 
@@ -593,18 +641,18 @@ if predict_button:
         )
 
 
-        # -------------------------------------------------
-        # Score progress
-        # -------------------------------------------------
+        # =================================================
+        # SCORE PROGRESS
+        # =================================================
 
         st.progress(
             int(score)
         )
 
 
-        # -------------------------------------------------
-        # Result message
-        # -------------------------------------------------
+        # =================================================
+        # RESULT MESSAGE
+        # =================================================
 
         if score >= 75:
 
@@ -633,6 +681,15 @@ if predict_button:
                 f"⚠️ Needs improvement. Predicted exam score: "
                 f"**{score:.2f} / 100**"
             )
+
+
+        # =================================================
+        # HISTORY MESSAGE
+        # =================================================
+
+        st.success(
+            "✅ Prediction saved to analytics history."
+        )
 
 
         # =================================================
@@ -674,6 +731,16 @@ if predict_button:
         result_df[
             "status"
         ] = status
+
+
+        result_df[
+            "model_used"
+        ] = type(model).__name__
+
+
+        result_df[
+            "timestamp"
+        ] = pd.Timestamp.now()
 
 
         st.download_button(
